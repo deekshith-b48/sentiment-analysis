@@ -25,8 +25,8 @@ src_path = os.path.join(current_dir, 'src')
 if src_path not in sys.path:
     sys.path.append(src_path)
 
-from preprocessing import preprocess_text_spacy, get_tfidf_vectorizer # Changed to spaCy
-from models import train_logistic_regression, evaluate_model, MODEL_DIR
+from preprocessing import preprocess_text_spacy, get_tfidf_vectorizer
+from models import train_logistic_regression, train_svm, train_random_forest, evaluate_model, MODEL_DIR
 from utils import calculate_detailed_metrics
 
 # Define default sentiment labels for IMDb (0: negative, 1: positive)
@@ -135,23 +135,25 @@ def main(args):
     y_test = y_test_model_eval_labels
 
     # --- 4. Train Model ---
-    # For now, only Logistic Regression is implemented as the primary example
+    model_filename = args.model_file
+    # If default model filename is used, adjust it based on model type
+    if model_filename == "logistic_regression_model.joblib": # Default from argparse
+        model_filename = f"{args.model_type}_model.joblib"
+
     if args.model_type == "logistic_regression":
-        model_filename = args.model_file or "logistic_regression_model.joblib"
-        model = train_logistic_regression(X_train_tfidf, y_train, model_filename=model_filename)
-    # Add conditions for other models like SVM, Random Forest here later
-    # elif args.model_type == "svm":
-    #     model_filename = args.model_file or "svm_model.joblib"
-    #     model = train_svm(X_train_tfidf, y_train, model_filename=model_filename)
-    # elif args.model_type == "random_forest":
-    #     model_filename = args.model_file or "random_forest_model.joblib"
-    #     model = train_random_forest(X_train_tfidf, y_train, model_filename=model_filename)
+        model = train_logistic_regression(X_train_tfidf, y_train, model_filename=model_filename, use_grid_search=args.tune_hyperparameters)
+    elif args.model_type == "svm":
+        # GridSearchCV for SVM can be added similarly if needed
+        model = train_svm(X_train_tfidf, y_train, model_filename=model_filename)
+    elif args.model_type == "random_forest":
+        model = train_random_forest(X_train_tfidf, y_train, model_filename=model_filename)
     else:
+        # This case should not be reached if choices in argparse are set correctly
         print(f"Unsupported model type: {args.model_type}")
         return
 
     if model is None:
-        print("Model training failed.")
+        print(f"Model training failed for {args.model_type}.")
         return
     print(f"{args.model_type} model trained successfully.")
 
@@ -185,7 +187,7 @@ if __name__ == "__main__":
         "--model_type",
         type=str,
         default="logistic_regression",
-        choices=["logistic_regression"], # Add "svm", "random_forest" later
+        choices=["logistic_regression", "svm", "random_forest"],
         help="Type of model to train."
     )
     parser.add_argument(
@@ -211,6 +213,11 @@ if __name__ == "__main__":
         type=int,
         default=0, # 0 means use full dataset, otherwise specify number of samples
         help="Number of data samples to use for a quick test run (0 for full dataset). Splits between train/test."
+    )
+    parser.add_argument(
+        "--tune_hyperparameters",
+        action="store_true", # Makes it a boolean flag, True if present, False otherwise
+        help="Enable hyperparameter tuning (GridSearchCV) for supported models (currently Logistic Regression)."
     )
     # Add arguments for data path if not using Hugging Face datasets later
 

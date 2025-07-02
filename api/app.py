@@ -13,8 +13,10 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 src_path = os.path.join(current_dir, '..', 'src')
 sys.path.append(src_path)
 
-from preprocessing import preprocess_text_spacy # Changed to spaCy
+from preprocessing import preprocess_text_spacy # For preprocessing
 from models import MODEL_DIR # To locate models
+from interpretability import explain_instance_lime # For LIME explanations
+# SENTIMENT_LABELS is defined locally in this file
 
 # --- Pydantic Models for Request and Response ---
 class SentimentRequest(BaseModel):
@@ -137,14 +139,42 @@ async def predict_sentiment(request: SentimentRequest):
         # 5. Map prediction to a human-readable sentiment label
         sentiment = SENTIMENT_LABELS.get(predicted_label_index, "unknown")
 
-        # 6. (Later) Add explanation from LIME/SHAP
+        # 6. Add explanation from LIME
         explanation_output = None
+        try:
+            # Ensure class_names are in the correct order for LIME (e.g., as per model.classes_)
+            # For binary classification with labels 0 and 1, and SENTIMENT_LABELS = {0: 'neg', 1: 'pos'}
+            # class_names for LIME should be ['negative', 'positive'] if that's how model was trained/outputs.
+            # Let's derive class_names from SENTIMENT_LABELS keys if possible or define explicitly.
+            # The order matters: it should match the order of probabilities from model.predict_proba()
+
+            # Assuming model.classes_ gives the order [0, 1] (negative, positive)
+            # and SENTIMENT_LABELS maps these indices to names.
+            # lime_class_names = [SENTIMENT_LABELS[i] for i in sorted(SENTIMENT_LABELS.keys())]
+            # More robustly, if model.classes_ is available:
+            if hasattr(model, 'classes_'):
+                lime_class_names = [SENTIMENT_LABELS.get(cls_idx, str(cls_idx)) for cls_idx in model.classes_]
+            else: # Fallback if model.classes_ is not available (less common for sklearn)
+                lime_class_names = [SENTIMENT_LABELS[0], SENTIMENT_LABELS[1]] # Assuming binary 0, 1
+
+            if vectorizer and model: # Ensure they are loaded
+                explanation_output = explain_instance_lime(
+                    raw_text=request.text,
+                    model=model,
+                    vectorizer=vectorizer,
+                    preprocessor_func=preprocess_text_spacy, # Pass the actual preprocessor
+                    class_names=lime_class_names,
+                    num_features=5 # Get top 5 features for the explanation
+                )
+        except Exception as lime_exc:
+            print(f"LIME explanation failed: {lime_exc}")
+            # explanation_output will remain None or you can set a specific error message
 
         return SentimentResponse(
             text=request.text,
             sentiment=sentiment,
             confidence_score=confidence,
-            explanation=explanation_output
+            explanation=dict(explanation_output) if explanation_output else None # Convert list of tuples to dict for Pydantic/JSON
         )
 
     except Exception as e:
