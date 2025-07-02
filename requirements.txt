@@ -1,6 +1,39 @@
-torch
+# Core ML/Data Science
 numpy
+pandas
+scikit-learn
+joblib # For saving/loading scikit-learn models
+
+# NLP
+nltk # Still potentially useful for other minor utilities, or can be removed if fully replaced
+spacy # For tokenization, lemmatization, etc.
+# Ensure spaCy English model is downloaded: python -m spacy download en_core_web_sm
+
+# Hugging Face Datasets
 datasets
-torchtext
-tqdm
-matplotlib
+
+# API Framework
+fastapi
+uvicorn[standard] # Includes standard dependencies like websockets
+pydantic
+
+# Dashboard
+streamlit
+plotly
+requests # For dashboard to call API
+
+# Deep Learning & Transformers (Placeholders for later stages)
+# torch
+# transformers
+# sentence-transformers
+
+# Model Interpretability (Placeholders for later stages)
+# lime
+# shap
+
+# Testing (Placeholder for later stage)
+# pytest
+
+# Optional for specific model dependencies (Placeholders)
+# xgboost
+# lightgbm
