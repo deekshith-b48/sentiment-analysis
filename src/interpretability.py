@@ -1,184 +1,196 @@
 # src/interpretability.py
 """
-Module for model interpretability using LIME.
+Module for model interpretability using LIME (Local Interpretable Model-agnostic Explanations).
 """
-from lime.lime_text import LimeTextExplainer
+from typing import Callable, List, Tuple, Optional, Any, Sequence
+
 import numpy as np
+from lime.lime_text import LimeTextExplainer
+from sklearn.feature_extraction.text import TfidfVectorizer
+# SklearnModel type can be imported or defined if a common type hint is used across modules
+# from .models import SklearnModel # Example if SklearnModel is defined in models.py
+SklearnModel = Any # Using Any for simplicity here, replace with more specific type if available
 
-# Assuming preprocessing functions might be needed here if not handled before calling
-# from .preprocessing import preprocess_text_spacy # Or however it's accessed
 
-def explain_instance_lime(raw_text: str, model, vectorizer, preprocessor_func, class_names=None, num_features=10):
+# Type alias for the preprocessor function
+PreprocessorFunc = Callable[[str], str]
+# Type alias for the LIME predictor function
+LimePredictorFunc = Callable[[List[str]], np.ndarray]
+
+
+def explain_instance_lime(
+    raw_text: str,
+    model: SklearnModel,
+    vectorizer: TfidfVectorizer,
+    preprocessor_func: PreprocessorFunc,
+    class_names: Optional[List[str]] = None,
+    num_features: int = 10
+) -> Optional[List[Tuple[str, float]]]:
     """
-    Explains a single prediction using LIME.
+    Explains a single prediction for a given raw text instance using LIME.
 
     Args:
-        raw_text (str): The raw text instance to explain.
-        model: The trained scikit-learn model.
-        vectorizer: The fitted TF-IDF vectorizer.
-        preprocessor_func: The function used to preprocess text (e.g., preprocess_text_spacy).
-                           It should take raw text and return a string of processed tokens.
-        class_names (list, optional): List of class names. If None, LIME will use generic names.
-                                      For binary classification, usually ['negative', 'positive'].
-        num_features (int, optional): Number of top features to show in the explanation.
+        raw_text (str): The raw text string to explain.
+        model (SklearnModel): The trained scikit-learn compatible classifier.
+            Must have a `predict_proba` method.
+        vectorizer (TfidfVectorizer): The fitted TF-IDF vectorizer.
+        preprocessor_func (PreprocessorFunc): A function that takes a raw text string
+            and returns a preprocessed string of tokens.
+        class_names (Optional[List[str]], optional): List of class names that correspond
+            to the order of probabilities returned by model.predict_proba().
+            If None, LIME uses generic names like "Class 0", "Class 1".
+            For binary sentiment, this is typically ['negative', 'positive'].
+            Defaults to None.
+        num_features (int, optional): The number of top features (words) to include
+            in the explanation. Defaults to 10.
 
     Returns:
-        list: A list of (feature, weight) tuples for the predicted class,
-              or None if an error occurs.
+        Optional[List[Tuple[str, float]]]: A list of (feature, weight) tuples representing
+            the LIME explanation for the top predicted class. Each tuple contains a
+            word (feature) and its corresponding weight indicating its contribution.
+            Returns None if an error occurs during explanation.
     """
     if not raw_text:
+        print("Error: Raw text for LIME explanation cannot be empty.")
         return None
 
     explainer = LimeTextExplainer(class_names=class_names)
 
-    # LIME's LimeTextExplainer expects a function that takes a list of raw text strings
-    # and returns a numpy array of probability scores for each class.
-    def predictor(texts):
+    def predictor(texts: List[str]) -> np.ndarray:
+        """
+        LIME-compatible predictor function.
+        Takes a list of raw text strings, preprocesses and vectorizes them,
+        and returns prediction probabilities from the model.
+        """
         if not texts:
             return np.array([])
 
-        # 1. Preprocess texts
-        processed_texts = [preprocessor_func(text) for text in texts]
+        processed_texts: List[str] = [preprocessor_func(text) for text in texts]
 
-        # 2. Vectorize preprocessed texts
-        # Ensure vectorizer is fitted and expects a list of strings
         try:
             vectorized_texts = vectorizer.transform(processed_texts)
         except Exception as e:
             print(f"Error during vectorization in LIME predictor: {e}")
-            # Return a dummy probability array that matches expected shape if possible
-            # This helps LIME not to crash but indicates an issue.
-            # Number of classes:
-            num_classes = len(class_names) if class_names is not None else (model.classes_.shape[0] if hasattr(model, 'classes_') else 2)
-            return np.full((len(texts), num_classes), 1.0 / num_classes)
+            num_classes_fallback = len(class_names) if class_names else (model.classes_.shape[0] if hasattr(model, 'classes_') else 2)
+            return np.full((len(texts), num_classes_fallback), 1.0 / num_classes_fallback)
 
-
-        # 3. Get prediction probabilities
-        # Ensure the model has a predict_proba method
         if hasattr(model, 'predict_proba'):
-            probas = model.predict_proba(vectorized_texts)
-            return probas
+            try:
+                probas: np.ndarray = model.predict_proba(vectorized_texts)
+                return probas
+            except Exception as e:
+                print(f"Error during model.predict_proba in LIME predictor: {e}")
+                num_classes_fallback = len(class_names) if class_names else (model.classes_.shape[0] if hasattr(model, 'classes_') else 2)
+                return np.full((len(texts), num_classes_fallback), 1.0 / num_classes_fallback)
         else:
-            # If model doesn't have predict_proba, LIME might not work as expected
-            # or might require a different setup. For scikit-learn classifiers,
-            # predict_proba is standard.
-            print("Warning: Model does not have predict_proba method. LIME explanations might be suboptimal or fail.")
-            # Fallback: try to return dummy probabilities
-            num_classes = len(class_names) if class_names is not None else (model.classes_.shape[0] if hasattr(model, 'classes_') else 2)
-            # Create one-hot encoded predictions if only predict is available (less ideal for LIME)
-            predictions = model.predict(vectorized_texts)
-            dummy_probas = np.zeros((len(texts), num_classes))
-            for i, p in enumerate(predictions):
-                if p < num_classes: # Ensure prediction is a valid index
-                    dummy_probas[i, p] = 1.0
-                else: # Handle unexpected prediction value
-                    dummy_probas[i, 0] = 1.0 # Default to first class
-            return dummy_probas
+            print("CRITICAL: Model does not have predict_proba method. LIME requires probability scores.")
+            # This case should ideally not be reached if model compatibility is ensured.
+            num_classes_fallback = len(class_names) if class_names else (model.classes_.shape[0] if hasattr(model, 'classes_') else 2)
+            return np.full((len(texts), num_classes_fallback), 1.0 / num_classes_fallback)
 
     try:
-        # Explain the prediction for the single raw_text instance
-        # LIME's explain_instance expects the raw text, not preprocessed.
-        # It will use the `predictor` function internally, which handles preprocessing.
         explanation = explainer.explain_instance(
-            raw_text,
-            predictor,
+            text_instance=raw_text,
+            classifier_fn=predictor,
             num_features=num_features,
             top_labels=1 # Explain only the top predicted label
         )
 
-        # Get the explanation for the top label
-        # The explanation.as_list() returns features for a specific label.
-        # If top_labels=1, it will be for the predicted class.
-        # We need to get the label for which the explanation was generated.
-        # LIME's internal prediction might differ if probabilities are very close.
-        # It's usually the first label in explanation.local_exp if top_labels=1
+        # explanation.as_list() returns features for the label passed, or top label if None
+        # explanation.top_labels[0] gives the index of the top predicted class by LIME's internal call
+        predicted_class_idx: int = explanation.top_labels[0]
+        explanation_list: List[Tuple[str, float]] = explanation.as_list(label=predicted_class_idx)
 
-        predicted_label_idx = explanation.top_labels[0]
-        explanation_list = explanation.as_list(label=predicted_label_idx)
-
-        # Convert to a more serializable format if needed, e.g., dict
-        # For now, returning as list of tuples: [(word, weight), ...]
         return explanation_list
 
     except Exception as e:
-        print(f"Error during LIME explanation: {e}")
+        print(f"Error during LIME explanation generation for text '{raw_text[:50]}...': {e}")
         import traceback
         traceback.print_exc()
         return None
 
 if __name__ == '__main__':
-    # This is a placeholder for testing the LIME explainer.
-    # It requires a trained model, vectorizer, and the preprocessor function.
+    # This block demonstrates LIME explanation.
+    # It requires a spaCy model for preprocessing and scikit-learn for model/vectorizer.
 
-    # --- Mock objects for testing ---
     from sklearn.linear_model import LogisticRegression
-    from sklearn.feature_extraction.text import TfidfVectorizer
     import sys, os
-    # Add src directory to allow importing preprocessing
-    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from preprocessing import preprocess_text_spacy, NLP_SPACY # Assuming NLP_SPACY is loaded in preprocessing
+
+    # Ensure src modules can be imported when running this file directly
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    src_path = os.path.dirname(current_dir) # up to 'src'
+    if src_path not in sys.path:
+        sys.path.append(src_path)
+
+    try:
+        from preprocessing import preprocess_text_spacy, NLP_SPACY
+    except ImportError:
+        print("Could not import preprocessing module. Ensure it's in the Python path.")
+        NLP_SPACY = None # Ensure NLP_SPACY is defined for the check below
 
     if NLP_SPACY is None:
-        print("spaCy model 'en_core_web_sm' not loaded. Cannot run LIME test.")
-        print("Please ensure spaCy model is downloaded and loads correctly in preprocessing.py")
+        print("spaCy model 'en_core_web_sm' (NLP_SPACY) is not loaded from preprocessing.py.")
+        print("Cannot run LIME __main__ example. Ensure spaCy model is downloaded and loads correctly.")
     else:
-        print("Setting up mock objects for LIME explainer test...")
-        # Sample data
-        sample_corpus = [
+        print("Setting up mock objects for LIME explainer __main__ test...")
+
+        sample_corpus_main: List[str] = [
             "This is a wonderfully fantastic movie, I loved it!",
             "This film was terribly boring and a complete waste of time.",
             "The movie was okay, neither good nor bad."
         ]
-        sample_labels = [1, 0, 1] # 1 for positive, 0 for negative
+        # Corresponding labels (1 for positive, 0 for negative)
+        sample_labels_main: List[int] = [1, 0, 1]
 
-        # 1. Preprocess
-        processed_corpus = [preprocess_text_spacy(text) for text in sample_corpus]
+        print("Preprocessing sample data for __main__ test...")
+        processed_corpus_main: List[str] = [preprocess_text_spacy(text) for text in sample_corpus_main]
 
-        if not all(processed_corpus): # Check if any preprocessing failed
-             print("Mock LIME test: Preprocessing failed for some texts. Ensure spaCy model is loaded in preprocessing.py.")
+        if not all(s.strip() for s in processed_corpus_main if s is not None): # Check if all are non-empty strings
+            print("Mock LIME test in __main__: Preprocessing failed for some texts or produced empty strings.")
         else:
-            # 2. Vectorize
-            mock_vectorizer = TfidfVectorizer()
-            mock_vectorizer.fit(processed_corpus)
-            X_mock = mock_vectorizer.transform(processed_corpus)
+            mock_vectorizer_main = TfidfVectorizer()
+            mock_vectorizer_main.fit(processed_corpus_main)
+            X_mock_main = mock_vectorizer_main.transform(processed_corpus_main)
 
-            # 3. Train a mock model
-            mock_model = LogisticRegression()
-            mock_model.fit(X_mock, sample_labels)
-            print("Mock model trained.")
+            mock_model_main = LogisticRegression()
+            mock_model_main.fit(X_mock_main, sample_labels_main)
+            print("Mock model trained for __main__ test.")
 
-            # 4. Test LIME explanation
-            test_raw_text_positive = "This is an amazing and fantastic piece of art, truly enjoyable."
-            test_raw_text_negative = "I absolutely hated this, it's a boring and terrible waste of my time."
+            test_raw_text_positive_main: str = "This is an amazing and fantastic piece of art, truly enjoyable."
+            test_raw_text_negative_main: str = "I absolutely hated this, it's a boring and terrible waste of my time."
 
-            class_names_test = ['negative', 'positive'] # Must match model's understanding of 0 and 1
+            # Class names should match the model's output interpretation (0: negative, 1: positive)
+            class_names_main: List[str] = ['negative', 'positive']
 
-            print(f"\nExplaining positive text: '{test_raw_text_positive}'")
-            explanation_pos = explain_instance_lime(
-                test_raw_text_positive,
-                mock_model,
-                mock_vectorizer,
-                preprocess_text_spacy, # Pass the actual preprocessor function
-                class_names=class_names_test
+            print(f"\nExplaining positive text for __main__: '{test_raw_text_positive_main}'")
+            explanation_pos_main = explain_instance_lime(
+                raw_text=test_raw_text_positive_main,
+                model=mock_model_main,
+                vectorizer=mock_vectorizer_main,
+                preprocessor_func=preprocess_text_spacy,
+                class_names=class_names_main,
+                num_features=5
             )
-            if explanation_pos:
-                print("LIME Explanation (Positive):")
-                for feature, weight in explanation_pos:
-                    print(f"  {feature}: {weight:.4f}")
+            if explanation_pos_main:
+                print("LIME Explanation (Positive - __main__):")
+                for feature, weight in explanation_pos_main:
+                    print(f"  '{feature}': {weight:.4f}")
             else:
-                print("Failed to get LIME explanation for positive text.")
+                print("Failed to get LIME explanation for positive text in __main__.")
 
-            print(f"\nExplaining negative text: '{test_raw_text_negative}'")
-            explanation_neg = explain_instance_lime(
-                test_raw_text_negative,
-                mock_model,
-                mock_vectorizer,
-                preprocess_text_spacy,
-                class_names=class_names_test
+            print(f"\nExplaining negative text for __main__: '{test_raw_text_negative_main}'")
+            explanation_neg_main = explain_instance_lime(
+                raw_text=test_raw_text_negative_main,
+                model=mock_model_main,
+                vectorizer=mock_vectorizer_main,
+                preprocessor_func=preprocess_text_spacy,
+                class_names=class_names_main,
+                num_features=5
             )
-            if explanation_neg:
-                print("LIME Explanation (Negative):")
-                for feature, weight in explanation_neg:
-                    print(f"  {feature}: {weight:.4f}")
+            if explanation_neg_main:
+                print("LIME Explanation (Negative - __main__):")
+                for feature, weight in explanation_neg_main:
+                    print(f"  '{feature}': {weight:.4f}")
             else:
-                print("Failed to get LIME explanation for negative text.")
+                print("Failed to get LIME explanation for negative text in __main__.")
+```
