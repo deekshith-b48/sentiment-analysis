@@ -27,9 +27,9 @@ requests # For dashboard to call API
 # transformers
 # sentence-transformers
 
-# Model Interpretability (Placeholders for later stages)
-# lime
-# shap
+# Model Interpretability
+lime
+# shap # Placeholder for later
 
 # Testing (Placeholder for later stage)
 # pytest
